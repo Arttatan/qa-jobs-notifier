@@ -2,6 +2,7 @@
   "telegram_bot_token": "PUT_YOUR_BOT_TOKEN_HERE",
   "telegram_chat_id": "PUT_YOUR_CHAT_ID_HERE",
   "poll_minutes": 5,
+  "remote_only": true,
   "send_empty_summary": true,
   "max_age_days": 7,
   "request_timeout_sec": 10,

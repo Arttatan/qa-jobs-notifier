@@ -66,9 +66,74 @@ QA_EXCLUDE_PATTERNS = [
     r"director",
     r"vp\b",
     r"vice president",
-    r"manager",
     r"sales",
 ]
+
+REMOTE_NEGATIVE_HINTS = [
+    r"\bhybrid\b",
+    r"\bon-?site\b",
+    r"\bonsite\b",
+    r"\boffice\b\s*based",
+    r"\bin-?\s*office\b",
+    r"\bon\s+prem\b",
+    r"\bcampus\b",
+    r"\brelocation\b",
+    r"\bon\s+premises\b",
+]
+
+
+def _remote_negative_regex(extra_patterns: List[str]) -> List[str]:
+    return REMOTE_NEGATIVE_HINTS + list(extra_patterns or [])
+
+
+def greenhouse_metadata_blob(job: dict) -> str:
+    parts: List[str] = []
+    for m in job.get("metadata") or []:
+        if not isinstance(m, dict):
+            continue
+        name = (m.get("name") or "").strip().lower()
+        val = m.get("value")
+        if isinstance(val, dict):
+            val = json.dumps(val, ensure_ascii=True)
+        if val is None:
+            continue
+        parts.append(f"{name}: {val}")
+    return " ".join(parts).lower()
+
+
+def is_strict_remote_text(blob: str, extra_exclude_patterns: List[str]) -> bool:
+    """True only when blob suggests remote-first / remote-only."""
+    if not blob or not blob.strip():
+        return True
+    s = blob.lower()
+    if any(re.search(p, s) for p in _remote_negative_regex(extra_exclude_patterns)):
+        return False
+    if re.search(r"\bremote\b", s):
+        return True
+    if re.search(r"\bwork\s+from\s+home\b|\bwfh\b|\btelecommut", s):
+        return True
+    return False
+
+
+def greenhouse_work_type(job: dict) -> Optional[str]:
+    for m in job.get("metadata") or []:
+        if not isinstance(m, dict):
+            continue
+        if (m.get("name") or "").strip().lower() == "work type":
+            val = m.get("value")
+            if isinstance(val, str):
+                return val.strip().lower()
+    return None
+
+
+def passes_remote_filter(v: Vacancy, config: Dict) -> bool:
+    if not config.get("remote_only", True):
+        return True
+    extra = config.get("remote_exclude_patterns", [])
+    blob = f"{v.title} {v.location}"
+    if not is_strict_remote_text(blob, extra):
+        return False
+    return True
 
 
 @dataclass
@@ -110,7 +175,7 @@ def is_qa_relevant(title: str) -> bool:
     return include_hit and not exclude_hit
 
 
-def fetch_greenhouse(board_name: str, timeout_sec: int) -> List[Vacancy]:
+def fetch_greenhouse(board_name: str, timeout_sec: int, config: Dict) -> List[Vacancy]:
     url = f"https://boards-api.greenhouse.io/v1/boards/{board_name}/jobs"
     try:
         resp = requests.get(url, timeout=timeout_sec)
@@ -129,13 +194,28 @@ def fetch_greenhouse(board_name: str, timeout_sec: int) -> List[Vacancy]:
         if not job_url:
             continue
         published_at = j.get("updated_at") or j.get("created_at")
+        location_name = (j.get("location") or {}).get("name", "")
+        meta_blob = greenhouse_metadata_blob(j)
+        work_type = greenhouse_work_type(j)
+
+        if config.get("remote_only", True):
+            if work_type:
+                if work_type in ("hybrid", "office based", "office-based", "on-site", "onsite"):
+                    continue
+                if work_type not in ("remote", "fully remote", "work from home"):
+                    if not is_strict_remote_text(f"{title} {location_name} {meta_blob}", config.get("remote_exclude_patterns", [])):
+                        continue
+            else:
+                if not is_strict_remote_text(f"{title} {location_name} {meta_blob}", config.get("remote_exclude_patterns", [])):
+                    continue
+
         out.append(
             Vacancy(
                 source=f"greenhouse:{board_name}",
                 uid=f"greenhouse:{board_name}:{j.get('id')}",
                 company=board_name,
                 title=title,
-                location=(j.get("location") or {}).get("name", ""),
+                location=location_name,
                 url=job_url,
                 published_at=published_at,
             )
@@ -143,7 +223,7 @@ def fetch_greenhouse(board_name: str, timeout_sec: int) -> List[Vacancy]:
     return out
 
 
-def fetch_remotive(timeout_sec: int) -> List[Vacancy]:
+def fetch_remotive(timeout_sec: int, _config: Dict) -> List[Vacancy]:
     try:
         resp = requests.get("https://remotive.com/api/remote-jobs", timeout=timeout_sec)
         resp.raise_for_status()
@@ -156,13 +236,14 @@ def fetch_remotive(timeout_sec: int) -> List[Vacancy]:
         title = (j.get("title") or "").strip()
         if not title or not is_qa_relevant(title):
             continue
+        loc = (j.get("candidate_required_location") or "").strip()
         out.append(
             Vacancy(
                 source="remotive",
                 uid=f"remotive:{j.get('id')}",
                 company=(j.get("company_name") or "").strip(),
                 title=title,
-                location=(j.get("candidate_required_location") or "").strip(),
+                location=loc,
                 url=(j.get("url") or "").strip(),
                 published_at=j.get("publication_date"),
             )
@@ -170,7 +251,7 @@ def fetch_remotive(timeout_sec: int) -> List[Vacancy]:
     return out
 
 
-def fetch_lever_company(company: str, timeout_sec: int) -> List[Vacancy]:
+def fetch_lever_company(company: str, timeout_sec: int, config: Dict) -> List[Vacancy]:
     try:
         resp = requests.get(f"https://api.lever.co/v0/postings/{company}?mode=json", timeout=timeout_sec)
         resp.raise_for_status()
@@ -186,11 +267,27 @@ def fetch_lever_company(company: str, timeout_sec: int) -> List[Vacancy]:
         title = (row.get("text") or "").strip()
         if not title or not is_qa_relevant(title):
             continue
+        workplace_type = (row.get("workplaceType") or "").strip().lower()
+        if config.get("remote_only", True) and workplace_type not in ("", "remote"):
+            continue
+
         company_name = (row.get("categories", {}).get("team") or company).strip()
         job_id = row.get("id") or row.get("hostedUrl")
         url = (row.get("hostedUrl") or "").strip()
         if not url:
             continue
+        desc_bits = [
+            row.get("descriptionPlain") or "",
+            row.get("additionalPlain") or "",
+            row.get("openingPlain") or "",
+            row.get("descriptionBodyPlain") or "",
+        ]
+        blob = " ".join(desc_bits + [title, workplace_type])
+        if config.get("remote_only", True) and not is_strict_remote_text(
+            blob, config.get("remote_exclude_patterns", [])
+        ):
+            continue
+
         out.append(
             Vacancy(
                 source=f"lever:{company}",
@@ -205,7 +302,7 @@ def fetch_lever_company(company: str, timeout_sec: int) -> List[Vacancy]:
     return out
 
 
-def fetch_weworkremotely(timeout_sec: int) -> List[Vacancy]:
+def fetch_weworkremotely(timeout_sec: int, _config: Dict) -> List[Vacancy]:
     headers = {"User-Agent": "Mozilla/5.0 (QA Vacancy Notifier)"}
     try:
         resp = requests.get("https://weworkremotely.com/remote-jobs-quality-assurance", headers=headers, timeout=timeout_sec)
@@ -232,7 +329,7 @@ def fetch_weworkremotely(timeout_sec: int) -> List[Vacancy]:
                 uid=uid,
                 company=company,
                 title=title,
-                location="Remote",
+                location="remote",
                 url=link,
                 published_at=None,
             )
@@ -240,7 +337,7 @@ def fetch_weworkremotely(timeout_sec: int) -> List[Vacancy]:
     return out
 
 
-def fetch_dynamitejobs(timeout_sec: int) -> List[Vacancy]:
+def fetch_dynamitejobs(timeout_sec: int, _config: Dict) -> List[Vacancy]:
     headers = {"User-Agent": "Mozilla/5.0 (QA Vacancy Notifier)"}
     try:
         resp = requests.get("https://dynamitejobs.com/", headers=headers, timeout=timeout_sec)
@@ -263,16 +360,12 @@ def fetch_dynamitejobs(timeout_sec: int) -> List[Vacancy]:
                 uid=f"dynamite:{link}",
                 company="unknown",
                 title=slug.title(),
-                location="Remote",
+                location="remote",
                 url=link,
                 published_at=None,
             )
         )
     return out
-
-
-def fetch_jobgether(timeout_sec: int) -> List[Vacancy]:
-    return fetch_lever_company("jobgether", timeout_sec)
 
 
 def is_fresh(v: Vacancy, max_age_days: int) -> bool:
@@ -328,28 +421,32 @@ def run_once(config: Dict, state: Dict) -> int:
     vacancies: List[Vacancy] = []
 
     for board in config.get("greenhouse_boards", DEFAULT_GREENHOUSE_BOARDS):
-        vacancies.extend(fetch_greenhouse(board, timeout_sec))
+        vacancies.extend(fetch_greenhouse(board, timeout_sec, config))
 
     if config.get("enable_remotive", True):
-        vacancies.extend(fetch_remotive(timeout_sec))
+        vacancies.extend(fetch_remotive(timeout_sec, config))
 
     if config.get("enable_weworkremotely", True):
-        vacancies.extend(fetch_weworkremotely(timeout_sec))
-
-    if config.get("enable_jobgether", True):
-        vacancies.extend(fetch_jobgether(timeout_sec))
+        vacancies.extend(fetch_weworkremotely(timeout_sec, config))
 
     if config.get("enable_dynamitejobs", True):
-        vacancies.extend(fetch_dynamitejobs(timeout_sec))
+        vacancies.extend(fetch_dynamitejobs(timeout_sec, config))
 
-    for company in config.get("lever_companies", DEFAULT_LEVER_COMPANIES):
-        vacancies.extend(fetch_lever_company(company, timeout_sec))
+    lever_cos = list(config.get("lever_companies", DEFAULT_LEVER_COMPANIES))
+    if config.get("enable_jobgether", True) and "jobgether" not in lever_cos:
+        lever_cos.insert(0, "jobgether")
+
+    for company in lever_cos:
+        vacancies.extend(fetch_lever_company(company, timeout_sec, config))
 
     new_hits = 0
     for v in vacancies:
         if not v.url:
             continue
         if v.uid in seen:
+            continue
+        if not passes_remote_filter(v, config):
+            seen.add(v.uid)
             continue
         if not is_fresh(v, max_age_days):
             seen.add(v.uid)
