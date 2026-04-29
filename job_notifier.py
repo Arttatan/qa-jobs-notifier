@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -126,16 +128,6 @@ def greenhouse_work_type(job: dict) -> Optional[str]:
     return None
 
 
-def passes_remote_filter(v: Vacancy, config: Dict) -> bool:
-    if not config.get("remote_only", True):
-        return True
-    extra = config.get("remote_exclude_patterns", [])
-    blob = f"{v.title} {v.location}"
-    if not is_strict_remote_text(blob, extra):
-        return False
-    return True
-
-
 @dataclass
 class Vacancy:
     source: str
@@ -145,6 +137,16 @@ class Vacancy:
     location: str
     url: str
     published_at: Optional[str]
+
+
+def passes_remote_filter(v: Vacancy, config: Dict) -> bool:
+    if not config.get("remote_only", True):
+        return True
+    extra = config.get("remote_exclude_patterns", [])
+    blob = f"{v.title} {v.location}"
+    if not is_strict_remote_text(blob, extra):
+        return False
+    return True
 
 
 def load_json(path: str, default):
@@ -296,7 +298,7 @@ def fetch_lever_company(company: str, timeout_sec: int, config: Dict) -> List[Va
                 title=title,
                 location=(row.get("categories", {}).get("location") or "").strip(),
                 url=url,
-                published_at=datetime.utcfromtimestamp(row.get("createdAt", 0) / 1000).isoformat() + "Z",
+                published_at=datetime.utcfromtimestamp((row.get("createdAt") or 0) / 1000).isoformat() + "Z",
             )
         )
     return out
