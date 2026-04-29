@@ -1,0 +1,41 @@
+{
+  "telegram_bot_token": "PUT_YOUR_BOT_TOKEN_HERE",
+  "telegram_chat_id": "PUT_YOUR_CHAT_ID_HERE",
+  "poll_minutes": 5,
+  "send_empty_summary": true,
+  "max_age_days": 7,
+  "request_timeout_sec": 10,
+  "enable_remotive": true,
+  "enable_weworkremotely": true,
+  "enable_jobgether": true,
+  "enable_dynamitejobs": true,
+  "lever_companies": [
+    "jobgether",
+    "veeva",
+    "openx",
+    "airalo",
+    "canarytechnologies",
+    "spinai",
+    "nordsec",
+    "walkme",
+    "welocalize",
+    "multiversx"
+  ],
+  "greenhouse_boards": [
+    "veeamsoftware",
+    "brainrocketltd",
+    "vonage",
+    "jetbrains",
+    "remotepeople",
+    "fundraiseup",
+    "clickhouse",
+    "shifttechnology",
+    "xebiacee",
+    "proton",
+    "wargamingen",
+    "medrio",
+    "silvare",
+    "fluxon",
+    "wunderflats"
+  ]
+}
