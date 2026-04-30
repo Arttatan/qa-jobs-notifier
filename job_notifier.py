@@ -10,7 +10,7 @@ from html import unescape
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 import requests
 
@@ -45,6 +45,30 @@ DEFAULT_LEVER_COMPANIES = [
     "walkme",
     "welocalize",
     "multiversx",
+]
+
+DEFAULT_SITE_SEARCH_SOURCES = [
+    {"name": "linkedin", "query_prefix": "site:linkedin.com/jobs/view"},
+    {"name": "indeed", "query_prefix": "site:indeed.com/viewjob OR site:indeed.com/jobs"},
+    {"name": "glassdoor", "query_prefix": "site:glassdoor.com/job-listing"},
+    {"name": "wellfound", "query_prefix": "site:wellfound.com/jobs"},
+    {"name": "europe-language-jobs", "query_prefix": "site:europelanguagejobs.com/jobs"},
+    {"name": "eures", "query_prefix": "site:eures.europa.eu"},
+    {"name": "remoteok", "query_prefix": "site:remoteok.com/remote-jobs"},
+    {"name": "workingnomads", "query_prefix": "site:workingnomads.com/jobs"},
+    {"name": "justremote", "query_prefix": "site:justremote.co/remote-jobs"},
+    {"name": "remoteco", "query_prefix": "site:remote.co/remote-jobs"},
+    {"name": "nofluffjobs", "query_prefix": "site:nofluffjobs.com"},
+    {"name": "jobspresso", "query_prefix": "site:jobspresso.co"},
+    {"name": "honeypot", "query_prefix": "site:honeypot.io"},
+    {"name": "hired", "query_prefix": "site:hired.com"},
+    {"name": "landingjobs", "query_prefix": "site:landing.jobs/jobs"},
+    {"name": "relocateme", "query_prefix": "site:relocate.me"},
+    {"name": "otta", "query_prefix": "site:otta.com/jobs OR site:welcometothejungle.com"},
+    {"name": "qajobs", "query_prefix": "site:qajobs.net OR site:qajobs.com"},
+    {"name": "softwaretestingjobs", "query_prefix": "site:softwaretestingjobs.co.uk"},
+    {"name": "ministryoftesting", "query_prefix": "site:ministryoftesting.com/jobs"},
+    {"name": "workable", "query_prefix": "site:apply.workable.com OR site:jobs.workable.com"},
 ]
 
 
@@ -370,6 +394,150 @@ def fetch_dynamitejobs(timeout_sec: int, _config: Dict) -> List[Vacancy]:
     return out
 
 
+def fetch_glassdoor(timeout_sec: int, config: Dict) -> List[Vacancy]:
+    """
+    Best-effort Glassdoor discovery via DuckDuckGo public HTML search.
+    This avoids paid/unofficial APIs, but can be less stable than JSON APIs.
+    """
+    query = str(config.get("glassdoor_query", "qa engineer remote")).strip()
+    if not query:
+        query = "qa engineer remote"
+
+    headers = {"User-Agent": "Mozilla/5.0 (QA Vacancy Notifier)"}
+    url = f"https://duckduckgo.com/html/?q={quote_plus('site:glassdoor.com ' + query)}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout_sec)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception:
+        return []
+
+    out: List[Vacancy] = []
+    seen_links: Set[str] = set()
+
+    pattern = re.compile(
+        r'<a[^>]*class="result__a"[^>]*href="(?P<link>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+        re.S,
+    )
+    for m in pattern.finditer(html):
+        raw_link = unescape(m.group("link")).strip()
+        title_html = m.group("title")
+        title = re.sub(r"<[^>]+>", "", unescape(title_html)).strip()
+        if not title:
+            continue
+        if not is_qa_relevant(title):
+            continue
+
+        link = raw_link
+        if "duckduckgo.com/l/" in raw_link:
+            try:
+                parsed = urlparse(raw_link)
+                uddg = parse_qs(parsed.query).get("uddg", [])
+                if uddg:
+                    link = unquote(uddg[0]).strip()
+            except Exception:
+                link = raw_link
+
+        if "glassdoor." not in link.lower():
+            continue
+        if link in seen_links:
+            continue
+        seen_links.add(link)
+
+        out.append(
+            Vacancy(
+                source="glassdoor",
+                uid=f"glassdoor:{link}",
+                company="unknown",
+                title=title,
+                location="remote",
+                url=link,
+                published_at=None,
+            )
+        )
+    return out
+
+
+def fetch_site_search(timeout_sec: int, config: Dict) -> List[Vacancy]:
+    """
+    Broad source discovery using DuckDuckGo HTML search over configured domains.
+    This is less strict than direct APIs, but allows covering many boards/sites.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (QA Vacancy Notifier)"}
+    keywords = str(config.get("site_search_keywords", "qa engineer remote europe")).strip()
+    if not keywords:
+        keywords = "qa engineer remote europe"
+    max_per_source = int(config.get("site_search_max_per_source", 5))
+    sources = config.get("site_search_sources", DEFAULT_SITE_SEARCH_SOURCES)
+    if not isinstance(sources, list):
+        sources = DEFAULT_SITE_SEARCH_SOURCES
+
+    out: List[Vacancy] = []
+    global_seen: Set[str] = set()
+
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        source_name = str(src.get("name", "")).strip().lower()
+        query_prefix = str(src.get("query_prefix", "")).strip()
+        if not source_name or not query_prefix:
+            continue
+
+        q = f"{query_prefix} {keywords}"
+        url = f"https://duckduckgo.com/html/?q={quote_plus(q)}"
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout_sec)
+            resp.raise_for_status()
+            html = resp.text
+        except Exception:
+            continue
+
+        found_for_source = 0
+        pattern = re.compile(
+            r'<a[^>]*class="result__a"[^>]*href="(?P<link>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+            re.S,
+        )
+        for m in pattern.finditer(html):
+            if found_for_source >= max_per_source:
+                break
+
+            raw_link = unescape(m.group("link")).strip()
+            title = re.sub(r"<[^>]+>", "", unescape(m.group("title"))).strip()
+            if not title or not is_qa_relevant(title):
+                continue
+
+            link = raw_link
+            if "duckduckgo.com/l/" in raw_link:
+                try:
+                    parsed = urlparse(raw_link)
+                    uddg = parse_qs(parsed.query).get("uddg", [])
+                    if uddg:
+                        link = unquote(uddg[0]).strip()
+                except Exception:
+                    link = raw_link
+
+            if not link:
+                continue
+            uid = f"site-search:{source_name}:{link}"
+            if uid in global_seen:
+                continue
+            global_seen.add(uid)
+
+            out.append(
+                Vacancy(
+                    source=f"site-search:{source_name}",
+                    uid=uid,
+                    company="unknown",
+                    title=title,
+                    location="remote",
+                    url=link,
+                    published_at=None,
+                )
+            )
+            found_for_source += 1
+    return out
+
+
 def is_fresh(v: Vacancy, max_age_days: int) -> bool:
     dt = parse_iso_dt(v.published_at)
     if not dt:
@@ -433,6 +601,12 @@ def run_once(config: Dict, state: Dict) -> int:
 
     if config.get("enable_dynamitejobs", True):
         vacancies.extend(fetch_dynamitejobs(timeout_sec, config))
+
+    if config.get("enable_glassdoor", True):
+        vacancies.extend(fetch_glassdoor(timeout_sec, config))
+
+    if config.get("enable_site_search", True):
+        vacancies.extend(fetch_site_search(timeout_sec, config))
 
     lever_cos = list(config.get("lever_companies", DEFAULT_LEVER_COMPANIES))
     if config.get("enable_jobgether", True) and "jobgether" not in lever_cos:
