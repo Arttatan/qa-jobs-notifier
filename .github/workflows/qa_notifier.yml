@@ -26,9 +26,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: qa-notifier-state-v2-${{ github.run_id }}
+          key: qa-notifier-state-v3-remotive-${{ github.run_id }}
           restore-keys: |
-            qa-notifier-state-v2-
+            qa-notifier-state-v3-remotive-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -51,10 +51,10 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python job_notifier.py --once
+        run: python job_notifier.py --once --config config.ci.json
 
       - name: Save notifier state cache
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: qa-notifier-state-v2-${{ github.run_id }}
+          key: qa-notifier-state-v3-remotive-${{ github.run_id }}

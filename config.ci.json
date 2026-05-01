@@ -1,0 +1,13 @@
+{
+  "poll_minutes": 5,
+  "remote_only": true,
+  "send_empty_summary": true,
+  "max_age_days": 7,
+  "request_timeout_sec": 20,
+  "enable_remotive": true,
+  "enable_weworkremotely": false,
+  "enable_jobgether": false,
+  "enable_dynamitejobs": false,
+  "lever_companies": [],
+  "greenhouse_boards": []
+}
