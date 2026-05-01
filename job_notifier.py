@@ -248,7 +248,8 @@ def fetch_lever_company(company: str, timeout_sec: int, config: Dict) -> List[Va
         resp = requests.get(f"https://api.lever.co/v0/postings/{company}?mode=json", timeout=timeout_sec)
         resp.raise_for_status()
         payload = resp.json()
-    except Exception:
+    except Exception as exc:
+        print(f"lever:{company} fetch failed ({exc})", file=sys.stderr)
         return []
 
     out: List[Vacancy] = []
@@ -428,8 +429,11 @@ def run_once(config: Dict, state: Dict) -> int:
     if config.get("enable_jobgether", True) and "jobgether" not in lever_cos:
         lever_cos.insert(0, "jobgether")
 
+    # Jobgether's Lever feed is huge (~40MB JSON); default HTTP timeout is too small.
+    lever_timeout_sec = int(config.get("lever_request_timeout_sec", max(timeout_sec, 120)))
+
     for company in lever_cos:
-        vacancies.extend(fetch_lever_company(company, timeout_sec, config))
+        vacancies.extend(fetch_lever_company(company, lever_timeout_sec, config))
 
     new_hits = 0
     for v in vacancies:

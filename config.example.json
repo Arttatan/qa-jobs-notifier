@@ -6,6 +6,7 @@
   "send_empty_summary": true,
   "max_age_days": 7,
   "request_timeout_sec": 10,
+  "lever_request_timeout_sec": 180,
   "enable_remotive": true,
   "enable_weworkremotely": true,
   "enable_jobgether": true,
