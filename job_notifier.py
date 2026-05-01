@@ -139,16 +139,6 @@ class Vacancy:
     published_at: Optional[str]
 
 
-def passes_remote_filter(v: Vacancy, config: Dict) -> bool:
-    if not config.get("remote_only", True):
-        return True
-    extra = config.get("remote_exclude_patterns", [])
-    blob = f"{v.title} {v.location}"
-    if not is_strict_remote_text(blob, extra):
-        return False
-    return True
-
-
 def load_json(path: str, default):
     if not os.path.exists(path):
         return default
@@ -446,9 +436,6 @@ def run_once(config: Dict, state: Dict) -> int:
         if not v.url:
             continue
         if v.uid in seen:
-            continue
-        if not passes_remote_filter(v, config):
-            seen.add(v.uid)
             continue
         if not is_fresh(v, max_age_days):
             seen.add(v.uid)
