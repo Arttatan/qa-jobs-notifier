@@ -89,6 +89,21 @@ Start in:
 C:\Users\35191\Search Job
 ```
 
+## Job apply copilot
+
+`job-apply-copilot/` is a separate agent. It searches the same style of public company job boards, shows links, and writes a cover letter only after you accept one role. It does not submit the application.
+
+Weekday search is 08:00 UTC. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in the environment when you want the shortlist or an approved draft in your own Telegram chat. The draft send can attach `Tatanov Artem QA engineer.pdf`.
+
+```bash
+cd job-apply-copilot
+npx tsc --noEmit
+npx @grok/agent-sdk validate --dir .
+npx @grok/agent-sdk dev
+```
+
+Playground: `http://127.0.0.1:3000/playground`
+
 ## Notes
 
 - The script stores sent jobs in `state.json` to avoid duplicate alerts.
